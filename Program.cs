@@ -14,16 +14,40 @@ Console.WriteLine("=== GufoRAG API 全流程範例 ===\n");
 
 try
 {
+    // 示範config相關流程(設定主題)
     // 1. 新增 config
     var newConfig = new ConfigRequest
     {
-        Role = "測試助手",
-        ModelName = "openai:gpt-4o",
-        ProductSystemPrompt = "你是測試用助手。",
-        SearchSelectedNumber = 3,
-        SearchTotalNumber = 6,
-        EnableSuggestQuestions = true,
-        UseKnowledgeMode = "strict"
+        // 系統提示詞
+        ProductSystemPrompt = "你是測試用助手。", 
+        // 機器人身份設定
+        Role = "測試助手", 
+        // 使用的AI模型名稱
+        ModelName = "openai:gpt-4o", 
+        // 實際用於上下文的搜索結果數量
+        SearchSelectedNumber = 3, 
+        // 檢索的總搜索結果數量
+        SearchTotalNumber = 6, 
+        // 詞向量搜索比例 (0.0=純向量, 1.0=純關鍵字)
+        DataSourceRatio = 0.0f,
+        // 知識使用模式：none/assist/strict (使用模型自有知識/參考資料+模型自有知識/限用參考資料)
+        UseKnowledgeMode = "strict", 
+        // 是否重新排序搜索結果
+        EnableRerank = true, 
+        // 記住的歷史對話數量
+        MemoryCount = 5, 
+        // 是否啟用推薦問題
+        EnableSuggestQuestions = true, 
+        // 回應格式：markdown/html
+        ResponseFormat = "markdown", 
+        // 文件欄位映射表 (key: 索引欄位, value: 給AI看的欄位名稱)
+        DocumentFieldMapping = new Dictionary<string, string> 
+        {
+            { "title", "標題" },
+            { "search", "內容" } 
+        },
+        // 選擇的文件索引列表 (資料集)
+        SelectedIndex = new List<string> { "貓問答", "狗問答" }
     };
     var createConfigRes = await PostJson($"{baseUrl}/api/config/{configName}", newConfig);
     Console.WriteLine($"[新增 config] {createConfigRes}\n");
@@ -45,9 +69,10 @@ try
         ChatRoomId = null,
         ChatLogId = null,
         HumanContent = "請問什麼是人工智慧？",
-        ConfigName = "default"
+        ConfigName = "default",
+        UserId = "test_user"
     };
-    int? chatRoomId = await ChatWithBot(chatRequest);
+    (var chatRoomId, var latestChatLogId) = await ChatWithBot(chatRequest);
     Console.WriteLine();
     await Task.Delay(5000); // 暫停5秒鐘
 
@@ -56,19 +81,17 @@ try
     Console.WriteLine();
     await Task.Delay(5000); // 暫停5秒鐘
 
-    // 6. 查詢聊天紀錄 (取第一個聊天室)
-    int? firstRoomId = chatRooms?.Count > 0 ? chatRooms[0].Id : null;
-    if (firstRoomId.HasValue)
+    // 6. 查詢聊天紀錄 (用剛問完的聊天室ID)
+    if (chatRoomId.HasValue)
     {
-        var chatLogs = await GetChatLogs(firstRoomId.Value);
+        var chatLogs = await GetChatLogs(chatRoomId.Value);
         Console.WriteLine();
         await Task.Delay(5000); // 暫停5秒鐘
 
-        // 7. 上傳評論 (取第一筆聊天紀錄)
-        int? firstLogId = chatLogs?.Count > 0 ? chatLogs[0].Id : null;
-        if (firstLogId.HasValue)
+        // 7. 上傳評論 (用聊天室的 latest_chat_log_id)
+        if (latestChatLogId.HasValue)
         {
-            await RateChatLog(firstLogId.Value);
+            await RateChatLog(latestChatLogId.Value);
             Console.WriteLine();
             await Task.Delay(5000); // 暫停5秒鐘
         }
@@ -105,7 +128,7 @@ async Task<string> Delete(string url)
 }
 
 // 聊天對話API (SSE串流)
-async Task<int?> ChatWithBot(ChatRequest chatRequest)
+async Task<(int? chatRoomId, int? latestChatLogId)> ChatWithBot(ChatRequest chatRequest)
 {
     Console.WriteLine("[問答 (SSE串流)]");
     Console.WriteLine($"使用者輸入: {chatRequest.HumanContent}");
@@ -125,6 +148,7 @@ async Task<int?> ChatWithBot(ChatRequest chatRequest)
             var fullMessage = new StringBuilder();
             string? line;
             int? returnedChatRoomId = null;
+            int? latestChatLogId = null;
             while (!reader.EndOfStream)
             {
                 line = await reader.ReadLineAsync();
@@ -142,12 +166,46 @@ async Task<int?> ChatWithBot(ChatRequest chatRequest)
                                 fullMessage.Append(chunk.Content);
                                 break;
                             case "chat_room":
-                                var chatRoomData = chunk.Data;
-                                if (chatRoomData != null)
+                                if (chunk.Data != null)
                                 {
-                                    var id = chatRoomData.GetValue("id");
-                                    returnedChatRoomId = id?.ToObject<int>();
-                                    Console.WriteLine($"\n[聊天室資訊] ID: {id}");
+                                    ChatRoom chatRoom = JsonConvert.DeserializeObject<ChatRoom>(chunk.Data.ToString());
+                                    if (chatRoom != null)
+                                    {
+                                        returnedChatRoomId = chatRoom.Id;
+                                        latestChatLogId = chatRoom.LatestChatLogId;
+                                        Console.WriteLine("\n[聊天室資訊]");
+                                        Console.WriteLine($"  聊天室ID: {chatRoom.Id}");
+                                        Console.WriteLine($"  聊天室標題: {chatRoom.Title}");
+                                        Console.WriteLine($"  聊天室描述: {chatRoom.Description}");
+                                        Console.WriteLine($"  機器人身份設定: {chatRoom.Role}");
+                                        Console.WriteLine($"  產品系統提示詞: {chatRoom.ProductSystemPrompt}");
+                                        Console.WriteLine($"  狀態: {chatRoom.Status}");
+                                        Console.WriteLine($"  使用的AI模型名稱: {chatRoom.ModelName}");
+                                        Console.WriteLine($"  使用的搜索結果數量: {chatRoom.SearchSelectedNumber}");
+                                        Console.WriteLine($"  檢索的總結果數量: {chatRoom.SearchTotalNumber}");
+                                        Console.WriteLine($"  詞與向量搜索的比例: {chatRoom.DataSourceRatio}");
+                                        Console.WriteLine($"  知識使用模式: {chatRoom.UseKnowledgeMode}");
+                                        Console.WriteLine($"  是否重新排序結果: {chatRoom.EnableRerank}");
+                                        Console.WriteLine($"  記住的歷史消息數量: {chatRoom.MemoryCount}");
+                                        Console.WriteLine($"  回應格式: {chatRoom.ResponseFormat}");
+                                        Console.WriteLine($"  是否啟用系統推薦問題: {chatRoom.EnableSuggestQuestions}");
+                                        Console.WriteLine($"  AI回應的創造性/隨機性: {chatRoom.Temperature}");
+                                        Console.WriteLine($"  文件欄位映射關係: {(chatRoom.DocumentFieldMapping != null && chatRoom.DocumentFieldMapping.Count > 0 ? string.Join(", ", chatRoom.DocumentFieldMapping.Select(kv => $"{kv.Key}:{kv.Value}")) : "無")}");
+                                        Console.WriteLine($"  聊天記錄數量: {chatRoom.ChatLogsCount}");
+                                        Console.WriteLine($"  建立時間: {chatRoom.CreatedAt}");
+                                        Console.WriteLine($"  更新時間: {chatRoom.UpdatedAt}");
+                                        Console.WriteLine($"  選擇的文件索引列表: {(chatRoom.SelectedIndex != null && chatRoom.SelectedIndex.Count > 0 ? string.Join(", ", chatRoom.SelectedIndex) : "無")}");
+                                        Console.WriteLine($"  建議問題: {(chatRoom.SuggestQuestions != null && chatRoom.SuggestQuestions.Count > 0 ? string.Join(", ", chatRoom.SuggestQuestions) : "無")}");
+                                        Console.WriteLine($"  最新聊天記錄ID: {chatRoom.LatestChatLogId}");
+                                        if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
+                                        {
+                                            Console.WriteLine($"  搜尋結果:");
+                                            foreach (var result in chatRoom.SearchResults)
+                                            {
+                                                Console.WriteLine($"    - {JsonConvert.SerializeObject(result)}");
+                                            }
+                                        }
+                                    }
                                 }
                                 break;
                             case "end":
@@ -163,18 +221,18 @@ async Task<int?> ChatWithBot(ChatRequest chatRequest)
             }
             EndStream:
             Console.WriteLine($"\n完整回應長度: {fullMessage.Length} 字元");
-            return returnedChatRoomId;
+            return (returnedChatRoomId, latestChatLogId);
         }
         else
         {
             await HandleErrorResponse(response);
-            return null;
+            return (null, null);
         }
     }
     catch (Exception ex)
     {
         Console.WriteLine($"✗ 聊天請求錯誤: {ex.Message}");
-        return null;
+        return (null, null);
     }
 }
 
@@ -194,9 +252,40 @@ async Task<List<ChatRoom>?> GetChatRooms()
             if (result?.Error == false && result.JsonData != null)
             {
                 Console.WriteLine($"✓ 找到 {result.JsonData.Count} 個聊天室:");
-                foreach (var room in result.JsonData)
+                foreach (var chatRoom in result.JsonData)
                 {
-                    Console.WriteLine($"  - ID: {room.Id}, 標題: {room.Title}, 角色: {room.Role}, 模型: {room.ModelName}, 記錄數: {room.ChatLogsCount}");
+                    Console.WriteLine("------------------------------");
+                    Console.WriteLine($"  聊天室ID: {chatRoom.Id}");
+                    Console.WriteLine($"  聊天室標題: {chatRoom.Title}");
+                    Console.WriteLine($"  聊天室描述: {chatRoom.Description}");
+                    Console.WriteLine($"  機器人身份設定: {chatRoom.Role}");
+                    Console.WriteLine($"  產品系統提示詞: {chatRoom.ProductSystemPrompt}");
+                    Console.WriteLine($"  狀態: {chatRoom.Status}");
+                    Console.WriteLine($"  使用的AI模型名稱: {chatRoom.ModelName}");
+                    Console.WriteLine($"  使用的搜索結果數量: {chatRoom.SearchSelectedNumber}");
+                    Console.WriteLine($"  檢索的總結果數量: {chatRoom.SearchTotalNumber}");
+                    Console.WriteLine($"  詞與向量搜索的比例: {chatRoom.DataSourceRatio}");
+                    Console.WriteLine($"  知識使用模式: {chatRoom.UseKnowledgeMode}");
+                    Console.WriteLine($"  是否重新排序結果: {chatRoom.EnableRerank}");
+                    Console.WriteLine($"  記住的歷史消息數量: {chatRoom.MemoryCount}");
+                    Console.WriteLine($"  回應格式: {chatRoom.ResponseFormat}");
+                    Console.WriteLine($"  是否啟用系統推薦問題: {chatRoom.EnableSuggestQuestions}");
+                    Console.WriteLine($"  AI回應的創造性/隨機性: {chatRoom.Temperature}");
+                    Console.WriteLine($"  文件欄位映射關係: {(chatRoom.DocumentFieldMapping != null && chatRoom.DocumentFieldMapping.Count > 0 ? string.Join(", ", chatRoom.DocumentFieldMapping.Select(kv => $"{kv.Key}:{kv.Value}")) : "無")}");
+                    Console.WriteLine($"  聊天記錄數量: {chatRoom.ChatLogsCount}");
+                    Console.WriteLine($"  建立時間: {chatRoom.CreatedAt}");
+                    Console.WriteLine($"  更新時間: {chatRoom.UpdatedAt}");
+                    Console.WriteLine($"  選擇的文件索引列表: {(chatRoom.SelectedIndex != null && chatRoom.SelectedIndex.Count > 0 ? string.Join(", ", chatRoom.SelectedIndex) : "無")}");
+                    Console.WriteLine($"  建議問題: {(chatRoom.SuggestQuestions != null && chatRoom.SuggestQuestions.Count > 0 ? string.Join(", ", chatRoom.SuggestQuestions) : "無")}");
+                    Console.WriteLine($"  最新聊天記錄ID: {chatRoom.LatestChatLogId}");
+                    if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
+                    {
+                        Console.WriteLine($"  搜尋結果:");
+                        foreach (var docResult in chatRoom.SearchResults)
+                        {
+                            Console.WriteLine($"    - {JsonConvert.SerializeObject(docResult)}");
+                        }
+                    }
                 }
                 return result.JsonData;
             }
@@ -328,9 +417,9 @@ public class ChatRequest
     [JsonProperty("chat_log_id")]
     public int? ChatLogId { get; set; }
     [JsonProperty("human_content")]
-    public string HumanContent { get; set; } = string.Empty;
+    public string HumanContent { get; set; }
     [JsonProperty("config_name")]
-    public string ConfigName { get; set; } = "default";
+    public string ConfigName { get; set; }
     [JsonProperty("user_id")]
     public string? UserId { get; set; }
 }
@@ -338,9 +427,9 @@ public class ChatRequest
 public class StreamChunk
 {
     [JsonProperty("chunk_type")]
-    public string ChunkType { get; set; } = string.Empty;
+    public string ChunkType { get; set; }
     [JsonProperty("content")]
-    public string Content { get; set; } = string.Empty;
+    public string Content { get; set; }
     [JsonProperty("data")]
     public dynamic? Data { get; set; }
 }
@@ -352,7 +441,7 @@ public class ApiResponse<T>
     [JsonProperty("error")]
     public bool Error { get; set; }
     [JsonProperty("message")]
-    public string Message { get; set; } = string.Empty;
+    public string Message { get; set; }
     [JsonProperty("code")]
     public int Code { get; set; }
     [JsonProperty("http_status")]
@@ -364,23 +453,17 @@ public class ChatRoom
     [JsonProperty("id")]
     public int Id { get; set; }
     [JsonProperty("title")]
-    public string Title { get; set; } = string.Empty;
+    public string Title { get; set; }
     [JsonProperty("description")]
-    public string Description { get; set; } = string.Empty;
+    public string Description { get; set; }
     [JsonProperty("role")]
-    public string Role { get; set; } = string.Empty;
-    [JsonProperty("chatroom_system_prompt")]
-    public string ChatroomSystemPrompt { get; set; } = string.Empty;
+    public string Role { get; set; }
     [JsonProperty("product_system_prompt")]
-    public string ProductSystemPrompt { get; set; } = string.Empty;
-    [JsonProperty("intension_system_prompt")]
-    public string IntensionSystemPrompt { get; set; } = string.Empty;
+    public string ProductSystemPrompt { get; set; }
     [JsonProperty("status")]
-    public string Status { get; set; } = string.Empty;
+    public string Status { get; set; }
     [JsonProperty("model_name")]
-    public string ModelName { get; set; } = string.Empty;
-    [JsonProperty("active_chain_end_id")]
-    public int? ActiveChainEndId { get; set; }
+    public string ModelName { get; set; }
     [JsonProperty("search_selected_number")]
     public int SearchSelectedNumber { get; set; }
     [JsonProperty("search_total_number")]
@@ -388,13 +471,13 @@ public class ChatRoom
     [JsonProperty("data_source_ratio")]
     public float DataSourceRatio { get; set; }
     [JsonProperty("use_knowledge_mode")]
-    public string UseKnowledgeMode { get; set; } = string.Empty;
+    public string UseKnowledgeMode { get; set; }
     [JsonProperty("enable_rerank")]
     public bool EnableRerank { get; set; }
     [JsonProperty("memory_count")]
     public int MemoryCount { get; set; }
     [JsonProperty("response_format")]
-    public string ResponseFormat { get; set; } = string.Empty;
+    public string ResponseFormat { get; set; }
     [JsonProperty("enable_suggest_questions")]
     public bool EnableSuggestQuestions { get; set; }
     [JsonProperty("temperature")]
@@ -407,6 +490,14 @@ public class ChatRoom
     public DateTime CreatedAt { get; set; }
     [JsonProperty("updated_at")]
     public DateTime UpdatedAt { get; set; }
+    [JsonProperty("suggest_questions")]
+    public List<string>? SuggestQuestions { get; set; }
+    [JsonProperty("search_results")]
+    public List<DocumentResult>? SearchResults { get; set; }
+    [JsonProperty("latest_chat_log_id")]
+    public int? LatestChatLogId { get; set; }
+    [JsonProperty("selected_index")]
+    public List<string>? SelectedIndex { get; set; }
 }
 
 public class ChatLog
@@ -418,7 +509,7 @@ public class ChatLog
     [JsonProperty("previous_chat_log_id")]
     public int? PreviousChatLogId { get; set; }
     [JsonProperty("human_content")]
-    public string HumanContent { get; set; } = string.Empty;
+    public string HumanContent { get; set; }
     [JsonProperty("ai_content")]
     public string? AiContent { get; set; }
     [JsonProperty("human_time")]
@@ -428,9 +519,9 @@ public class ChatLog
     [JsonProperty("suggest_questions")]
     public List<string>? SuggestQuestions { get; set; }
     [JsonProperty("search_results")]
-    public List<object>? SearchResults { get; set; }
+    public List<DocumentResult>? SearchResults { get; set; }
     [JsonProperty("language")]
-    public string Language { get; set; } = string.Empty;
+    public string Language { get; set; }
     [JsonProperty("is_coding")]
     public bool IsCoding { get; set; }
     [JsonProperty("query_start_time")]
@@ -446,7 +537,7 @@ public class ChatLog
 public class RatingRequest
 {
     [JsonProperty("rating_type")]
-    public string RatingType { get; set; } = string.Empty;
+    public string RatingType { get; set; }
     [JsonProperty("feedback")]
     public string? Feedback { get; set; }
 }
@@ -454,11 +545,11 @@ public class RatingRequest
 public class ConfigRequest
 {
     [JsonProperty("product_system_prompt")]
-    public string ProductSystemPrompt { get; set; } = string.Empty;
+    public string ProductSystemPrompt { get; set; }
     [JsonProperty("role")]
-    public string Role { get; set; } = string.Empty;
+    public string Role { get; set; }
     [JsonProperty("model_name")]
-    public string ModelName { get; set; } = string.Empty;
+    public string ModelName { get; set; }
     [JsonProperty("search_selected_number")]
     public int SearchSelectedNumber { get; set; }
     [JsonProperty("search_total_number")]
@@ -466,7 +557,7 @@ public class ConfigRequest
     [JsonProperty("data_source_ratio")]
     public float DataSourceRatio { get; set; }
     [JsonProperty("use_knowledge_mode")]
-    public string UseKnowledgeMode { get; set; } = string.Empty;
+    public string UseKnowledgeMode { get; set; }
     [JsonProperty("enable_rerank")]
     public bool EnableRerank { get; set; }
     [JsonProperty("memory_count")]
@@ -474,9 +565,39 @@ public class ConfigRequest
     [JsonProperty("enable_suggest_questions")]
     public bool EnableSuggestQuestions { get; set; }
     [JsonProperty("response_format")]
-    public string ResponseFormat { get; set; } = string.Empty;
+    public string ResponseFormat { get; set; }
     [JsonProperty("document_field_mapping")]
     public Dictionary<string, string>? DocumentFieldMapping { get; set; }
     [JsonProperty("selected_index")]
     public List<string>? SelectedIndex { get; set; }
+}
+
+public class DocumentResult
+{
+    [JsonProperty("doc_name")]
+    public string DocName { get; set; }
+
+    [JsonProperty("document_id")]
+    public string DocumentId { get; set; }
+
+    [JsonProperty("chunk_index")]
+    public int ChunkIndex { get; set; }
+
+    [JsonProperty("data_source")]
+    public string DataSource { get; set; }
+
+    [JsonProperty("index")]
+    public string Index { get; set; }
+
+    [JsonProperty("search_mode")]
+    public string SearchMode { get; set; }
+
+    [JsonProperty("last_modified")]
+    public DateTime LastModified { get; set; }
+
+    [JsonProperty("score")]
+    public float Score { get; set; }
+
+    [JsonProperty("document")]
+    public Dictionary<string, object> Document { get; set; }
 }
