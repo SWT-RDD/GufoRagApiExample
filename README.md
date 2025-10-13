@@ -20,7 +20,8 @@ POST http://localhost:8000/api/chat/chatbot
   "chat_log_id": null,
   "human_content": "請問什麼是人工智慧？",
   "config_name": "default",
-  "user_id": "user123"
+  "user_id": "user123",
+  "selected_index": ["technical_docs", "faq_docs"]
 }
 ```
 
@@ -32,6 +33,7 @@ POST http://localhost:8000/api/chat/chatbot
 | human_content         | 使用者輸入內容，3-2000字      |
 | config_name           | 配置名稱，預設為 "default"    |
 | user_id               | 使用者ID，選填，用於識別用戶身份 |
+| selected_index        | 選擇的文件索引列表，陣列型態(如["technical_docs", "faq_docs"])，可用於指定本次查詢要檢索的索引，若未傳則使用config預設值 |
 
 ### curl 請求範例
 ```
@@ -42,7 +44,8 @@ curl -X POST http://localhost:8000/api/chat/chatbot \
     "chat_log_id": null,
     "human_content": "請問什麼是人工智慧？",
     "config_name": "default",
-    "user_id": "user123"
+    "user_id": "user123",
+    "selected_index": ["technical_docs", "faq_docs"]
   }'
 ```
 

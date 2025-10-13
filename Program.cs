@@ -51,16 +51,76 @@ try
     };
     var createConfigRes = await PostJson($"{baseUrl}/api/config/{configName}", newConfig);
     Console.WriteLine($"[新增 config] {createConfigRes}\n");
+    try
+    {
+        var createConfigObj = JsonConvert.DeserializeObject<JsonResponse<ChatConfig>>(createConfigRes);
+        if (createConfigObj?.JsonData != null)
+        {
+            ChatConfig.Print(createConfigObj.JsonData);
+        }
+        else
+        {
+            Console.WriteLine("[警告] 回傳內容無法轉為 ChatConfig");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[反序列化失敗] {ex.Message}");
+    }
     await Task.Delay(5000); // 暫停5秒鐘
 
     // 2. 查詢 config 列表
     var configListRes = await Get($"{baseUrl}/api/config/list");
     Console.WriteLine($"[查詢 config 列表] {configListRes}\n");
+    try
+    {
+        var configListObj = JsonConvert.DeserializeObject<JsonResponse<List<ChatConfig>>>(configListRes);
+        if (configListObj?.JsonData != null && configListObj.JsonData.Count > 0)
+        {
+            foreach (var config in configListObj.JsonData)
+            {
+                ChatConfig.Print(config);
+                Console.WriteLine();
+            }
+        }
+        else
+        {
+            Console.WriteLine("[警告] 查無 config 或格式不符");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[反序列化失敗] {ex.Message}");
+    }
     await Task.Delay(5000); // 暫停5秒鐘
 
     // 3. 刪除 config
     var deleteConfigRes = await Delete($"{baseUrl}/api/config/{configName}");
     Console.WriteLine($"[刪除 config] {deleteConfigRes}\n");
+    try
+    {
+        var deleteConfigObj = JsonConvert.DeserializeObject<JsonResponse<object>>(deleteConfigRes);
+        if (deleteConfigObj?.JsonData != null)
+        {
+            var deletedConfigName = (deleteConfigObj.JsonData as Newtonsoft.Json.Linq.JObject)?["deleted_config"]?.ToString();
+            if (!string.IsNullOrEmpty(deletedConfigName))
+            {
+                Console.WriteLine($"已刪除 config: {deletedConfigName}");
+            }
+            else
+            {
+                Console.WriteLine("[警告] 刪除回傳內容無法取得 deleted_config");
+            }
+        }
+        else
+        {
+            Console.WriteLine("[警告] 刪除回傳內容無法取得 deleted_config");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[反序列化失敗] {ex.Message}");
+    }
     await Task.Delay(5000); // 暫停5秒鐘
 
     // 4. 問答 (SSE串流)
@@ -95,6 +155,11 @@ try
             Console.WriteLine();
             await Task.Delay(5000); // 暫停5秒鐘
         }
+
+        // 8. 檢查評論是否成功 (再查一次聊天紀錄)
+        await GetChatLogs(chatRoomId.Value);
+        Console.WriteLine();
+        await Task.Delay(5000); // 暫停5秒鐘
     }
 }
 catch (Exception ex)
@@ -200,9 +265,30 @@ async Task<(int? chatRoomId, int? latestChatLogId)> ChatWithBot(ChatRequest chat
                                         if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
                                         {
                                             Console.WriteLine($"  搜尋結果:");
-                                            foreach (var result in chatRoom.SearchResults)
+                                            int idx = 1;
+                                            foreach (var r in chatRoom.SearchResults)
                                             {
-                                                Console.WriteLine($"    - {JsonConvert.SerializeObject(result)}");
+                                                Console.WriteLine($"    - 結果 {idx++}:");
+                                                Console.WriteLine($"      文件名稱(doc_name): {r.DocName}");
+                                                Console.WriteLine($"      文件ID(document_id): {r.DocumentId}");
+                                                Console.WriteLine($"      區塊索引(chunk_index): {r.ChunkIndex}");
+                                                Console.WriteLine($"      資料來源(data_source): {r.DataSource}");
+                                                Console.WriteLine($"      索引名稱(index): {r.Index}");
+                                                Console.WriteLine($"      搜索模式(search_mode): {r.SearchMode}");
+                                                Console.WriteLine($"      最後修改時間(last_modified): {r.LastModified:yyyy-MM-dd HH:mm:ss}");
+                                                Console.WriteLine($"      分數(score): {r.Score}");
+                                                if (r.Document != null && r.Document.Count > 0)
+                                                {
+                                                    Console.WriteLine($"      文件內容(document):");
+                                                    foreach (var docField in r.Document)
+                                                    {
+                                                        Console.WriteLine($"        - {docField.Key}: {docField.Value}");
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    Console.WriteLine($"      文件內容(document): 無");
+                                                }
                                             }
                                         }
                                     }
@@ -248,7 +334,7 @@ async Task<List<ChatRoom>?> GetChatRooms()
         if (response.IsSuccessStatusCode)
         {
             var content = await response.Content.ReadAsStringAsync();
-            var result = JsonConvert.DeserializeObject<ApiResponse<List<ChatRoom>>>(content);
+            var result = JsonConvert.DeserializeObject<JsonResponse<List<ChatRoom>>>(content);
             if (result?.Error == false && result.JsonData != null)
             {
                 Console.WriteLine($"✓ 找到 {result.JsonData.Count} 個聊天室:");
@@ -281,9 +367,30 @@ async Task<List<ChatRoom>?> GetChatRooms()
                     if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
                     {
                         Console.WriteLine($"  搜尋結果:");
-                        foreach (var docResult in chatRoom.SearchResults)
+                        int idx = 1;
+                        foreach (var r in chatRoom.SearchResults)
                         {
-                            Console.WriteLine($"    - {JsonConvert.SerializeObject(docResult)}");
+                            Console.WriteLine($"    - 結果 {idx++}:");
+                            Console.WriteLine($"      文件名稱(doc_name): {r.DocName}");
+                            Console.WriteLine($"      文件ID(document_id): {r.DocumentId}");
+                            Console.WriteLine($"      區塊索引(chunk_index): {r.ChunkIndex}");
+                            Console.WriteLine($"      資料來源(data_source): {r.DataSource}");
+                            Console.WriteLine($"      索引名稱(index): {r.Index}");
+                            Console.WriteLine($"      搜索模式(search_mode): {r.SearchMode}");
+                            Console.WriteLine($"      最後修改時間(last_modified): {r.LastModified:yyyy-MM-dd HH:mm:ss}");
+                            Console.WriteLine($"      分數(score): {r.Score}");
+                            if (r.Document != null && r.Document.Count > 0)
+                            {
+                                Console.WriteLine($"      文件內容(document):");
+                                foreach (var docField in r.Document)
+                                {
+                                    Console.WriteLine($"        - {docField.Key}: {docField.Value}");
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine($"      文件內容(document): 無");
+                            }
                         }
                     }
                 }
@@ -318,20 +425,61 @@ async Task<List<ChatLog>?> GetChatLogs(int chatRoomId)
         if (response.IsSuccessStatusCode)
         {
             var content = await response.Content.ReadAsStringAsync();
-            var result = JsonConvert.DeserializeObject<ApiResponse<List<ChatLog>>>(content);
+            var result = JsonConvert.DeserializeObject<JsonResponse<List<ChatLog>>>(content);
             if (result?.Error == false && result.JsonData != null)
             {
                 Console.WriteLine($"✓ 找到 {result.JsonData.Count} 筆聊天記錄:");
                 foreach (var log in result.JsonData)
                 {
-                    Console.WriteLine($"  - 記錄ID: {log.Id}");
-                    Console.WriteLine($"    使用者: {log.HumanContent}");
-                    Console.WriteLine($"    AI: {log.AiContent?.Substring(0, Math.Min(50, log.AiContent?.Length ?? 0))}...");
-                    Console.WriteLine($"    時間: {log.HumanTime:yyyy-MM-dd HH:mm:ss}");
-                    if (log.SuggestQuestions?.Any() == true)
+                    Console.WriteLine("------------------------------");
+                    Console.WriteLine($"  記錄ID: {log.Id}");
+                    Console.WriteLine($"  所屬聊天室ID: {log.ChatRoomId}");
+                    Console.WriteLine($"  前一筆聊天記錄ID: {(log.PreviousChatLogId.HasValue ? log.PreviousChatLogId.ToString() : "無")}");
+                    Console.WriteLine($"  使用者問題: {log.HumanContent}");
+                    Console.WriteLine($"  AI 回答: {log.AiContent}");
+                    Console.WriteLine($"  使用者發問時間: {log.HumanTime:yyyy-MM-dd HH:mm:ss}");
+                    Console.WriteLine($"  AI 回答時間: {(log.AiTime.HasValue ? log.AiTime.Value.ToString("yyyy-MM-dd HH:mm:ss") : "無")}");
+                    Console.WriteLine($"  建議問題: {(log.SuggestQuestions != null && log.SuggestQuestions.Count > 0 ? string.Join(", ", log.SuggestQuestions) : "無")}");
+                    // 更細緻列出搜尋結果
+                    if (log.SearchResults != null && log.SearchResults.Count > 0)
                     {
-                        Console.WriteLine($"    建議問題: {string.Join(", ", log.SuggestQuestions)}");
+                        Console.WriteLine($"  搜尋結果:");
+                        int idx = 1;
+                        foreach (var r in log.SearchResults)
+                        {
+                            Console.WriteLine($"    - 結果 {idx++}:");
+                            Console.WriteLine($"      文件名稱(doc_name): {r.DocName}");
+                            Console.WriteLine($"      文件ID(document_id): {r.DocumentId}");
+                            Console.WriteLine($"      區塊索引(chunk_index): {r.ChunkIndex}");
+                            Console.WriteLine($"      資料來源(data_source): {r.DataSource}");
+                            Console.WriteLine($"      索引名稱(index): {r.Index}");
+                            Console.WriteLine($"      搜索模式(search_mode): {r.SearchMode}");
+                            Console.WriteLine($"      最後修改時間(last_modified): {r.LastModified:yyyy-MM-dd HH:mm:ss}");
+                            Console.WriteLine($"      分數(score): {r.Score}");
+                            if (r.Document != null && r.Document.Count > 0)
+                            {
+                                Console.WriteLine($"      文件內容(document):");
+                                foreach (var docField in r.Document)
+                                {
+                                    Console.WriteLine($"        - {docField.Key}: {docField.Value}");
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine($"      文件內容(document): 無");
+                            }
+                        }
                     }
+                    else
+                    {
+                        Console.WriteLine($"  搜尋結果: 無");
+                    }
+                    Console.WriteLine($"  語言: {log.Language}");
+                    Console.WriteLine($"  是否為程式碼問題: {(log.IsCoding ? "是" : "否")}");
+                    Console.WriteLine($"  查詢開始時間: {(log.QueryStartTime.HasValue ? log.QueryStartTime.Value.ToString("yyyy-MM-dd HH:mm:ss") : "無")}");
+                    Console.WriteLine($"  查詢結束時間: {(log.QueryEndTime.HasValue ? log.QueryEndTime.Value.ToString("yyyy-MM-dd HH:mm:ss") : "無")}");
+                    Console.WriteLine($"  關鍵字: {(log.Keywords != null && log.Keywords.Count > 0 ? string.Join(", ", log.Keywords) : "無")}");
+                    Console.WriteLine($"  問題標準化: {(string.IsNullOrEmpty(log.Question) ? "無" : log.Question)}");
                     Console.WriteLine();
                 }
                 return result.JsonData;
@@ -372,7 +520,7 @@ async Task RateChatLog(int chatLogId)
         if (response.IsSuccessStatusCode)
         {
             var responseContent = await response.Content.ReadAsStringAsync();
-            var result = JsonConvert.DeserializeObject<ApiResponse<object>>(responseContent);
+            var result = JsonConvert.DeserializeObject<JsonResponse<object>>(responseContent);
             if (result?.Error == false)
             {
                 Console.WriteLine($"✓ 評價提交成功: {result.Message}");
@@ -399,7 +547,7 @@ async Task HandleErrorResponse(HttpResponseMessage response)
     try
     {
         var errorContent = await response.Content.ReadAsStringAsync();
-        var error = JsonConvert.DeserializeObject<ApiResponse<object>>(errorContent);
+        var error = JsonConvert.DeserializeObject<JsonResponse<object>>(errorContent);
         Console.WriteLine($"✗ API 錯誤: {error?.Message} (代碼: {error?.Code}, HTTP: {response.StatusCode})");
     }
     catch
@@ -434,7 +582,7 @@ public class StreamChunk
     public dynamic? Data { get; set; }
 }
 
-public class ApiResponse<T>
+public class JsonResponse<T>
 {
     [JsonProperty("json_data")]
     public T? JsonData { get; set; }
@@ -600,4 +748,47 @@ public class DocumentResult
 
     [JsonProperty("document")]
     public Dictionary<string, object> Document { get; set; }
+}
+
+public class ChatConfig
+{
+    public string? ChatroomSystemPrompt { get; set; } // 聊天室系統提示詞
+    public string? ProductSystemPrompt { get; set; } // 產品系統提示詞
+    public string? IntensionSystemPrompt { get; set; } // 意圖系統提示詞
+    public string Role { get; set; } // 機器人身份設定
+    public string ModelName { get; set; } // 使用的AI模型名稱
+    public int SearchSelectedNumber { get; set; } // 實際用於上下文的搜索結果數量
+    public int SearchTotalNumber { get; set; } // 檢索的總搜索結果數量
+    public float DataSourceRatio { get; set; } // 詞向量搜索比例 (0.0=純向量, 1.0=純關鍵字)
+    public string UseKnowledgeMode { get; set; } // 知識使用模式：none/assist/strict
+    public bool EnableRerank { get; set; } // 是否重新排序搜索結果
+    public int MemoryCount { get; set; } // 記住的歷史對話數量
+    public bool EnableSuggestQuestions { get; set; } // 是否啟用推薦問題
+    public string ResponseFormat { get; set; } // 回應格式：markdown/html
+    public float Temperature { get; set; } // AI回應的創造性/隨機性
+    public string? Timezone { get; set; } // 時區
+    public Dictionary<string, string>? DocumentFieldMapping { get; set; } // 文件欄位映射表
+    public List<string>? SelectedIndex { get; set; } // 選擇的文件索引列表
+
+    public static void Print(ChatConfig config)
+    {
+        Console.WriteLine("【配置資訊】");
+        Console.WriteLine($"  聊天室系統提示詞: {config.ChatroomSystemPrompt ?? "(無)"}");
+        Console.WriteLine($"  產品系統提示詞: {config.ProductSystemPrompt ?? "(無)"}");
+        Console.WriteLine($"  意圖系統提示詞: {config.IntensionSystemPrompt ?? "(無)"}");
+        Console.WriteLine($"  機器人身份設定: {config.Role}");
+        Console.WriteLine($"  使用的AI模型名稱: {config.ModelName}");
+        Console.WriteLine($"  實際用於上下文的搜索結果數量: {config.SearchSelectedNumber}");
+        Console.WriteLine($"  檢索的總搜索結果數量: {config.SearchTotalNumber}");
+        Console.WriteLine($"  詞向量搜索比例: {config.DataSourceRatio}");
+        Console.WriteLine($"  知識使用模式: {config.UseKnowledgeMode}");
+        Console.WriteLine($"  是否重新排序搜索結果: {(config.EnableRerank ? "是" : "否")}");
+        Console.WriteLine($"  記住的歷史對話數量: {config.MemoryCount}");
+        Console.WriteLine($"  是否啟用推薦問題: {(config.EnableSuggestQuestions ? "是" : "否")}");
+        Console.WriteLine($"  回應格式: {config.ResponseFormat}");
+        Console.WriteLine($"  AI回應的創造性/隨機性: {config.Temperature}");
+        Console.WriteLine($"  時區: {config.Timezone ?? "(無)"}");
+        Console.WriteLine($"  文件欄位映射表: {(config.DocumentFieldMapping != null && config.DocumentFieldMapping.Count > 0 ? string.Join(", ", config.DocumentFieldMapping.Select(kv => $"{kv.Key}:{kv.Value}")) : "無")}");
+        Console.WriteLine($"  選擇的文件索引列表: {(config.SelectedIndex != null && config.SelectedIndex.Count > 0 ? string.Join(", ", config.SelectedIndex) : "無")}");
+    }
 }
