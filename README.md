@@ -21,7 +21,9 @@ POST http://localhost:8000/api/chat/chatbot
   "human_content": "請問什麼是人工智慧？",
   "config_name": "default",
   "user_id": "user123",
-  "selected_index": ["technical_docs", "faq_docs"]
+  "selected_index": ["technical_docs", "faq_docs"],
+  "contains_any": [1, 2, 3],
+  "privileges": [10, 20]
 }
 ```
 
@@ -34,6 +36,8 @@ POST http://localhost:8000/api/chat/chatbot
 | config_name           | 配置名稱，預設為 "default"    |
 | user_id               | 使用者ID，選填，用於識別用戶身份 |
 | selected_index        | 選擇的文件索引列表，陣列型態(如["technical_docs", "faq_docs"])，可用於指定本次查詢要檢索的索引，若未傳則使用config預設值 |
+| contains_any          | 包含任一關鍵字的過濾條件，整數陣列，選填 |
+| privileges            | 使用者權限列表，整數陣列，選填 |
 
 ### curl 請求範例
 ```
@@ -45,7 +49,9 @@ curl -X POST http://localhost:8000/api/chat/chatbot \
     "human_content": "請問什麼是人工智慧？",
     "config_name": "default",
     "user_id": "user123",
-    "selected_index": ["technical_docs", "faq_docs"]
+    "selected_index": ["technical_docs", "faq_docs"],
+    "contains_any": [1, 2, 3],
+    "privileges": [10, 20]
   }'
 ```
 
@@ -70,6 +76,8 @@ data: {
     "model_name": "openai:gpt-4o",
     "status": "active",
     "selected_index": ["technical_docs", "faq_docs"],
+    "contains_any": [1, 2, 3],
+    "privileges": [10, 20],
     "search_selected_number": 8,
     "search_total_number": 16,
     "data_source_ratio": 0.5,
@@ -227,6 +235,9 @@ curl http://localhost:8000/api/chat/chatrooms/user/user123?limit=10
       "status": "active",
       "model_name": "openai:gpt-4o",
       "active_chain_end_id": null,
+      "selected_index": ["technical_docs", "faq_docs"],
+      "contains_any": [1, 2, 3],
+      "privileges": [10, 20],
       "search_selected_number": 5,
       "search_total_number": 10,
       "data_source_ratio": 0.7,
@@ -262,6 +273,9 @@ curl http://localhost:8000/api/chat/chatrooms/user/user123?limit=10
 | status                   | 狀態 (active/inactive)    |
 | model_name               | 使用的AI模型名稱          |
 | active_chain_end_id      | 活躍對話鏈結尾ID          |
+| selected_index           | 選擇的文件索引列表        |
+| contains_any             | 包含任一關鍵字的過濾條件  |
+| privileges               | 使用者權限列表            |
 | search_selected_number   | 使用的搜索結果數量        |
 | search_total_number      | 檢索的總結果數量          |
 | data_source_ratio        | 詞與向量搜索的比例        |
@@ -336,10 +350,161 @@ curl http://localhost:8000/api/chat/chatrooms/1/chatlogs
 }
 ```
 
+## 聊天室管理 API
+
+### 刪除聊天室
+#### URL
+DELETE http://localhost:8000/api/chat/chatrooms/{chat_room_id}
+
+#### 請求參數
+- `chat_room_id`: 聊天室ID (路徑參數)
+
+#### curl 請求範例
+```
+curl -X DELETE http://localhost:8000/api/chat/chatrooms/1
+```
+
+#### 回應資料範例
+```json
+{
+  "json_data": {
+    "chat_room_id": 1
+  },
+  "error": false,
+  "message": "成功",
+  "code": 0,
+  "http_status": 200
+}
+```
+
+## 聊天記錄查詢 API（進階）
+
+### 根據ID獲取特定聊天記錄
+#### URL
+GET http://localhost:8000/api/chat/chatlogs/{chat_log_id}
+
+#### 請求參數
+- `chat_log_id`: 聊天記錄ID (路徑參數)
+
+#### curl 請求範例
+```
+curl http://localhost:8000/api/chat/chatlogs/1
+```
+
+#### 回應資料範例
+```json
+{
+  "json_data": {
+    "id": 1,
+    "chat_room_id": 1,
+    "chat_room_title": "AI助手對話",
+    "user_id": "user123",
+    "previous_chat_log_id": null,
+    "human_content": "請問什麼是人工智慧？",
+    "ai_content": "人工智慧（Artificial Intelligence, AI）是一門跨領域的科學...",
+    "human_time": "2024-01-01T10:00:00+08:00",
+    "ai_time": "2024-01-01T10:00:05+08:00",
+    "suggest_questions": ["機器學習和AI有什麼差別？", "AI有哪些實際應用？"],
+    "search_results": [...],
+    "language": "繁體中文",
+    "is_coding": false,
+    "query_start_time": "2024-01-01T10:00:01+08:00",
+    "query_end_time": "2024-01-01T10:00:03+08:00",
+    "keywords": ["人工智慧", "AI", "技術"],
+    "question": "使用者詢問人工智慧的定義和概念",
+    "rating_type": null,
+    "rating_feedback": null,
+    "rating_time": null
+  },
+  "error": false,
+  "message": "成功",
+  "code": 0,
+  "http_status": 200
+}
+```
+
+### 列出所有聊天記錄（支援過濾）
+#### URL
+GET http://localhost:8000/api/chat/chatlogs
+
+#### 查詢參數
+| 參數名稱   | 類型   | 必填 | 說明                         |
+| ---------- | ------ | ---- | ---------------------------- |
+| user_id    | string | 否   | 使用者ID                     |
+| start_time | string | 否   | 開始時間（ISO 8601格式）     |
+| end_time   | string | 否   | 結束時間（ISO 8601格式）     |
+| limit      | int    | 否   | 返回數量限制（預設100，最大1000） |
+| offset     | int    | 否   | 分頁偏移量（預設0）          |
+
+#### curl 請求範例
+```
+# 查詢所有聊天記錄
+curl http://localhost:8000/api/chat/chatlogs
+
+# 查詢特定使用者的聊天記錄
+curl "http://localhost:8000/api/chat/chatlogs?user_id=user123"
+
+# 查詢特定時間範圍的聊天記錄
+curl "http://localhost:8000/api/chat/chatlogs?start_time=2024-01-01T00:00:00Z&end_time=2024-01-31T23:59:59Z"
+
+# 分頁查詢
+curl "http://localhost:8000/api/chat/chatlogs?limit=50&offset=100"
+
+# 組合查詢
+curl "http://localhost:8000/api/chat/chatlogs?user_id=user123&start_time=2024-01-01T00:00:00Z&limit=20"
+```
+
+#### 回應資料範例
+```json
+{
+  "json_data": {
+    "chat_logs": [
+      {
+        "id": 1,
+        "chat_room_id": 1,
+        "previous_chat_log_id": null,
+        "human_content": "請問什麼是人工智慧？",
+        "ai_content": "人工智慧（Artificial Intelligence, AI）是一門跨領域的科學...",
+        "human_time": "2024-01-01T10:00:00Z",
+        "ai_time": "2024-01-01T10:00:05Z",
+        "suggest_questions": ["機器學習和AI有什麼差別？", "AI有哪些實際應用？"],
+        "search_results": [...],
+        "language": "繁體中文",
+        "is_coding": false,
+        "query_start_time": "2024-01-01T10:00:01Z",
+        "query_end_time": "2024-01-01T10:00:03Z",
+        "keywords": ["人工智慧", "AI", "技術"],
+        "question": "使用者詢問人工智慧的定義和概念",
+        "rating_type": null,
+        "rating_feedback": null,
+        "rating_time": null
+      }
+    ],
+    "total_count": 150,
+    "returned_count": 1,
+    "limit": 100,
+    "offset": 0,
+    "filters_applied": {
+      "user_id": null,
+      "start_time": null,
+      "end_time": null
+    }
+  },
+  "error": false,
+  "message": "成功",
+  "code": 0,
+  "http_status": 200
+}
+```
+
 ## 聊天記錄評價 API
 
 ### 提交評價
-POST http://localhost:8000/api/chat/chat_logs/{chat_log_id}/rating
+#### URL
+POST http://localhost:8000/api/chat/chatlogs/{chat_log_id}/rating
+
+#### 請求參數
+- `chat_log_id`: 聊天記錄ID (路徑參數)
 
 #### 請求資料範例
 ```json
@@ -355,8 +520,15 @@ POST http://localhost:8000/api/chat/chat_logs/{chat_log_id}/rating
 | positive    | 好評 |
 | negative    | 壞評 |
 
-### 查詢評價
-GET http://localhost:8000/api/chat/chat_logs/{chat_log_id}/rating
+#### curl 請求範例
+```
+curl -X POST http://localhost:8000/api/chat/chatlogs/1/rating \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rating_type": "positive",
+    "feedback": "回答很有幫助"
+  }'
+```
 
 #### 回應資料範例
 ```json
@@ -365,11 +537,10 @@ GET http://localhost:8000/api/chat/chat_logs/{chat_log_id}/rating
     "chat_log_id": 1,
     "rating_type": "positive",
     "rating_feedback": "回答很有幫助",
-    "rating_time": "2024-01-01T10:05:00Z",
-    "has_rating": true
+    "rating_time": "2024-01-01T10:05:00Z"
   },
   "error": false,
-  "message": "獲取評價成功",
+  "message": "評價提交成功",
   "code": 0,
   "http_status": 200
 }
