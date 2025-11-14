@@ -56,7 +56,17 @@ curl -X POST http://localhost:8000/api/chat/chatbot \
 ```
 
 ### 回應資料格式 (SSE 串流)
-回應採用 Server-Sent Events 格式，每行以 `data: ` 開頭：
+回應採用 Server-Sent Events 格式，每行以 `data: ` 開頭。
+
+#### 串流塊類型總覽
+chatbot API 的串流回應包含以下幾種類型的資料塊：
+
+| chunk_type  | 說明                                   | 發送時機               |
+| ----------- | -------------------------------------- | ---------------------- |
+| message     | AI 生成的訊息內容（逐字串流）          | 生成回答時持續發送     |
+| chat_room   | 聊天室完整資訊（包含搜索結果、推薦問題等） | 對話完成後發送一次     |
+| error       | 錯誤訊息                               | 處理過程發生錯誤時發送 |
+| end         | 結束標記                               | 串流結束時發送         |
 
 #### 訊息塊 (chunk_type: "message")
 ```
@@ -110,6 +120,22 @@ data: {
   }
 }
 ```
+
+#### 錯誤塊 (chunk_type: "error")
+當串流處理過程中發生錯誤時，會發送錯誤訊息塊：
+```
+data: {"chunk_type": "error", "content": "錯誤訊息描述", "data": {"status": "error"}}
+```
+
+**錯誤塊欄位說明**：
+- `chunk_type`: 固定為 "error"
+- `content`: 錯誤訊息的詳細描述
+- `data.status`: 固定為 "error"
+
+**注意事項**：
+- 當接收到 error 類型的塊時，表示對話處理過程發生錯誤
+- 前端應該停止處理後續的串流資料並顯示錯誤訊息
+- 錯誤訊息包含在 `content` 欄位中
 
 #### 結束塊 (chunk_type: "end")
 ```

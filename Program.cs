@@ -262,6 +262,8 @@ async Task<(int? chatRoomId, int? latestChatLogId)> ChatWithBot(ChatRequest chat
                                         Console.WriteLine($"  選擇的文件索引列表: {(chatRoom.SelectedIndex != null && chatRoom.SelectedIndex.Count > 0 ? string.Join(", ", chatRoom.SelectedIndex) : "無")}");
                                         Console.WriteLine($"  建議問題: {(chatRoom.SuggestQuestions != null && chatRoom.SuggestQuestions.Count > 0 ? string.Join(", ", chatRoom.SuggestQuestions) : "無")}");
                                         Console.WriteLine($"  最新聊天記錄ID: {chatRoom.LatestChatLogId}");
+                                        Console.WriteLine($" 包含任一關鍵字的過濾條件(contains_any): {(chatRoom.ContainsAny != null && chatRoom.ContainsAny.Count >0 ? string.Join(", ", chatRoom.ContainsAny) : "無")}");
+                                        Console.WriteLine($" 使用者權限列表(privileges): {(chatRoom.Privileges != null && chatRoom.Privileges.Count >0 ? string.Join(", ", chatRoom.Privileges) : "無")}");
                                         if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
                                         {
                                             Console.WriteLine($"  搜尋結果:");
@@ -298,8 +300,9 @@ async Task<(int? chatRoomId, int? latestChatLogId)> ChatWithBot(ChatRequest chat
                                 Console.WriteLine("\n[對話結束]");
                                 goto EndStream;
                             case "error":
-                                Console.WriteLine($"\n[錯誤] {chunk.Data?.GetValue("error")}");
-                                break;
+                                //依README規範，顯示錯誤訊息並停止串流
+                                Console.WriteLine($"\n[錯誤] {chunk.Content}");
+                                goto EndStream;
                         }
                     }
                     catch (JsonException) { }
@@ -317,7 +320,7 @@ async Task<(int? chatRoomId, int? latestChatLogId)> ChatWithBot(ChatRequest chat
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"✗ 聊天請求錯誤: {ex.Message}");
+        Console.WriteLine(ex);
         return (null, null);
     }
 }
@@ -364,6 +367,8 @@ async Task<List<ChatRoom>?> GetChatRooms()
                     Console.WriteLine($"  選擇的文件索引列表: {(chatRoom.SelectedIndex != null && chatRoom.SelectedIndex.Count > 0 ? string.Join(", ", chatRoom.SelectedIndex) : "無")}");
                     Console.WriteLine($"  建議問題: {(chatRoom.SuggestQuestions != null && chatRoom.SuggestQuestions.Count > 0 ? string.Join(", ", chatRoom.SuggestQuestions) : "無")}");
                     Console.WriteLine($"  最新聊天記錄ID: {chatRoom.LatestChatLogId}");
+                    Console.WriteLine($" 包含任一關鍵字的過濾條件(contains_any): {(chatRoom.ContainsAny != null && chatRoom.ContainsAny.Count >0 ? string.Join(", ", chatRoom.ContainsAny) : "無")}");
+                    Console.WriteLine($" 使用者權限列表(privileges): {(chatRoom.Privileges != null && chatRoom.Privileges.Count >0 ? string.Join(", ", chatRoom.Privileges) : "無")}");
                     if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
                     {
                         Console.WriteLine($"  搜尋結果:");
@@ -570,6 +575,8 @@ public class ChatRequest
     public string ConfigName { get; set; }
     [JsonProperty("user_id")]
     public string? UserId { get; set; }
+    [JsonProperty("selected_index")]
+    public List<string>? SelectedIndex { get; set; }
 }
 
 public class StreamChunk
@@ -646,6 +653,10 @@ public class ChatRoom
     public int? LatestChatLogId { get; set; }
     [JsonProperty("selected_index")]
     public List<string>? SelectedIndex { get; set; }
+    [JsonProperty("contains_any")]
+    public List<string>? ContainsAny { get; set; }
+    [JsonProperty("privileges")]
+    public List<string>? Privileges { get; set; }
 }
 
 public class ChatLog
