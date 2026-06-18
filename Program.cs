@@ -7,7 +7,7 @@ handler.ServerCertificateCustomValidationCallback =
     (httpRequestMessage, cert, cetChain, policyErrors) => true;
 HttpClient client = new HttpClient(handler); // 如果碰到SSL憑證問題，可能可以嘗試加上或拿掉handler
 
-string baseUrl = "http://localhost:8000";
+string baseUrl = "http://localhost:5555";
 string configName = "demo_config"; // 新增用的 config 名稱
 
 Console.WriteLine("=== GufoRAG API 全流程範例 ===\n");
