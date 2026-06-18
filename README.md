@@ -6,7 +6,7 @@
 ## 聊天對話 API (SSE 串流)
 
 ### URL
-POST http://localhost:8000/api/chat/chatbot
+POST http://localhost:5555/api/chat/chatbot
 
 ### 請求格式
 | KEY            | VALUE                |
@@ -22,26 +22,28 @@ POST http://localhost:8000/api/chat/chatbot
   "config_name": "default",
   "user_id": "user123",
   "selected_index": ["technical_docs", "faq_docs"],
-  "contains_any": [1, 2, 3],
-  "privileges": [10, 20]
+  "dsl": "$privileges in [10, 20] and $containsAny in [1, 2, 3]",
+  "document_ids": ["doc_001_ai_intro"]
 }
 ```
+
+> **⚠️ 破壞性變更（v0.9.0）**：篩選條件已統一改用 `dsl` 字串，舊的 `contains_any` / `privileges` / `filter_text` 欄位**已移除**。請求改為嚴格模式（`extra=forbid`），若仍帶入這些舊欄位會直接回傳 **422**，不再靜默忽略。
 
 #### 請求參數說明
 | KEY                   | VALUE                       |
 | --------------------- | --------------------------- |
 | chat_room_id          | 聊天室ID，null表示新建聊天室    |
 | chat_log_id           | 聊天記錄ID，null表示新建記錄   |
-| human_content         | 使用者輸入內容，3-2000字      |
+| human_content         | 使用者輸入內容，1-2000字      |
 | config_name           | 配置名稱，預設為 "default"    |
 | user_id               | 使用者ID，選填，用於識別用戶身份 |
 | selected_index        | 選擇的文件索引列表，陣列型態(如["technical_docs", "faq_docs"])，可用於指定本次查詢要檢索的索引，若未傳則使用config預設值 |
-| contains_any          | 包含任一關鍵字的過濾條件，整數陣列，選填 |
-| privileges            | 使用者權限列表，整數陣列，選填 |
+| dsl                   | 篩選條件 DSL 字串，選填。原樣傳給 manager_backend 並與系統自動解析的檔名/時間條件以 `and` 併接。例如 `$privileges in [10, 20] and $containsAny in [1, 2, 3]`（語法見 manager_backend 篩選欄位文件） |
+| document_ids          | 限制搜尋的文件 ID 清單，字串陣列，選填。只在這些文件範圍內檢索 |
 
 ### curl 請求範例
 ```
-curl -X POST http://localhost:8000/api/chat/chatbot \
+curl -X POST http://localhost:5555/api/chat/chatbot \
   -H "Content-Type: application/json" \
   -d '{
     "chat_room_id": null,
@@ -50,8 +52,8 @@ curl -X POST http://localhost:8000/api/chat/chatbot \
     "config_name": "default",
     "user_id": "user123",
     "selected_index": ["technical_docs", "faq_docs"],
-    "contains_any": [1, 2, 3],
-    "privileges": [10, 20]
+    "dsl": "$privileges in [10, 20] and $containsAny in [1, 2, 3]",
+    "document_ids": ["doc_001_ai_intro"]
   }'
 ```
 
@@ -63,10 +65,27 @@ chatbot API 的串流回應包含以下幾種類型的資料塊：
 
 | chunk_type  | 說明                                   | 發送時機               |
 | ----------- | -------------------------------------- | ---------------------- |
+| thinking    | AI 推理過程（reasoning tokens）        | 推理模型思考時持續發送 |
 | message     | AI 生成的訊息內容（逐字串流）          | 生成回答時持續發送     |
 | chat_room   | 聊天室完整資訊（包含搜索結果、推薦問題等） | 對話完成後發送一次     |
 | error       | 錯誤訊息                               | 處理過程發生錯誤時發送 |
 | end         | 結束標記                               | 串流結束時發送         |
+
+#### 推理塊 (chunk_type: "thinking")
+推理模型（如 GPT-5 系列、Claude reasoning 模型）在生成最終回答前，會先串流推理過程。此塊與 `message` 塊**分開發送**，前端應與最終回答區隔顯示（例如灰底、可折疊），且**不應**併入最終答案內容。
+```
+data: {"chunk_type": "thinking", "content": "我需要先釐清使用者問的是...", "data": {"content": "我需要先釐清使用者問的是...", "timestamp": "2026-06-03T10:30:00Z"}}
+```
+
+**推理塊欄位說明**：
+- `chunk_type`: 固定為 "thinking"
+- `content`: 本段推理文字（逐段串流）
+- `data.content`: 同 `content`
+- `data.timestamp`: 該段推理的時間戳（ISO 8601）
+
+**注意事項**：
+- 非推理模型不會發送 thinking 塊；前端應視為可選、優雅降級
+- 若不需顯示推理過程，可直接忽略此類塊
 
 #### 訊息塊 (chunk_type: "message")
 ```
@@ -86,8 +105,8 @@ data: {
     "model_name": "openai:gpt-4o",
     "status": "active",
     "selected_index": ["technical_docs", "faq_docs"],
-    "contains_any": [1, 2, 3],
-    "privileges": [10, 20],
+    "dsl": "$privileges in [10, 20] and $containsAny in [1, 2, 3]",
+    "document_ids": ["doc_001_ai_intro"],
     "search_selected_number": 8,
     "search_total_number": 16,
     "data_source_ratio": 0.5,
@@ -222,19 +241,19 @@ data: {"chunk_type": "end", "content": "", "data": {"status": "completed"}}
 
 ### 獲取所有聊天室
 #### URL
-GET http://localhost:8000/api/chat/chatrooms
+GET http://localhost:5555/api/chat/chatrooms
 
 #### 請求格式
 無需特殊標頭，直接發送 GET 請求即可。
 
 #### curl 請求範例
 ```
-curl http://localhost:8000/api/chat/chatrooms
+curl http://localhost:5555/api/chat/chatrooms
 ```
 
 ### 根據使用者ID獲取聊天室
 #### URL
-GET http://localhost:8000/api/chat/chatrooms/user/{user_id}
+GET http://localhost:5555/api/chat/chatrooms/user/{user_id}
 
 #### 請求參數
 - `user_id`: 使用者ID (路徑參數)
@@ -242,8 +261,8 @@ GET http://localhost:8000/api/chat/chatrooms/user/{user_id}
 
 #### curl 請求範例
 ```
-curl http://localhost:8000/api/chat/chatrooms/user/user123
-curl http://localhost:8000/api/chat/chatrooms/user/user123?limit=10
+curl http://localhost:5555/api/chat/chatrooms/user/user123
+curl http://localhost:5555/api/chat/chatrooms/user/user123?limit=10
 ```
 
 ### 回應資料範例
@@ -262,8 +281,8 @@ curl http://localhost:8000/api/chat/chatrooms/user/user123?limit=10
       "model_name": "openai:gpt-4o",
       "active_chain_end_id": null,
       "selected_index": ["technical_docs", "faq_docs"],
-      "contains_any": [1, 2, 3],
-      "privileges": [10, 20],
+      "dsl": "$privileges in [10, 20] and $containsAny in [1, 2, 3]",
+      "document_ids": ["doc_001_ai_intro"],
       "search_selected_number": 5,
       "search_total_number": 10,
       "data_source_ratio": 0.7,
@@ -300,8 +319,8 @@ curl http://localhost:8000/api/chat/chatrooms/user/user123?limit=10
 | model_name               | 使用的AI模型名稱          |
 | active_chain_end_id      | 活躍對話鏈結尾ID          |
 | selected_index           | 選擇的文件索引列表        |
-| contains_any             | 包含任一關鍵字的過濾條件  |
-| privileges               | 使用者權限列表            |
+| dsl                      | 篩選條件 DSL 字串         |
+| document_ids             | 限制搜尋的文件 ID 清單    |
 | search_selected_number   | 使用的搜索結果數量        |
 | search_total_number      | 檢索的總結果數量          |
 | data_source_ratio        | 詞與向量搜索的比例        |
@@ -319,14 +338,14 @@ curl http://localhost:8000/api/chat/chatrooms/user/user123?limit=10
 ## 聊天記錄查詢 API
 
 ### URL
-GET http://localhost:8000/api/chat/chatrooms/{chat_room_id}/chatlogs
+GET http://localhost:5555/api/chat/chatrooms/{chat_room_id}/chatlogs
 
 ### 請求參數
 - `chat_room_id`: 聊天室ID (路徑參數)
 
 ### curl 請求範例
 ```
-curl http://localhost:8000/api/chat/chatrooms/1/chatlogs
+curl http://localhost:5555/api/chat/chatrooms/1/chatlogs
 ```
 
 ### 回應資料範例
@@ -380,14 +399,14 @@ curl http://localhost:8000/api/chat/chatrooms/1/chatlogs
 
 ### 刪除聊天室
 #### URL
-DELETE http://localhost:8000/api/chat/chatrooms/{chat_room_id}
+DELETE http://localhost:5555/api/chat/chatrooms/{chat_room_id}
 
 #### 請求參數
 - `chat_room_id`: 聊天室ID (路徑參數)
 
 #### curl 請求範例
 ```
-curl -X DELETE http://localhost:8000/api/chat/chatrooms/1
+curl -X DELETE http://localhost:5555/api/chat/chatrooms/1
 ```
 
 #### 回應資料範例
@@ -407,14 +426,14 @@ curl -X DELETE http://localhost:8000/api/chat/chatrooms/1
 
 ### 根據ID獲取特定聊天記錄
 #### URL
-GET http://localhost:8000/api/chat/chatlogs/{chat_log_id}
+GET http://localhost:5555/api/chat/chatlogs/{chat_log_id}
 
 #### 請求參數
 - `chat_log_id`: 聊天記錄ID (路徑參數)
 
 #### curl 請求範例
 ```
-curl http://localhost:8000/api/chat/chatlogs/1
+curl http://localhost:5555/api/chat/chatlogs/1
 ```
 
 #### 回應資料範例
@@ -451,7 +470,7 @@ curl http://localhost:8000/api/chat/chatlogs/1
 
 ### 列出所有聊天記錄（支援過濾）
 #### URL
-GET http://localhost:8000/api/chat/chatlogs
+GET http://localhost:5555/api/chat/chatlogs
 
 #### 查詢參數
 | 參數名稱   | 類型   | 必填 | 說明                         |
@@ -465,19 +484,19 @@ GET http://localhost:8000/api/chat/chatlogs
 #### curl 請求範例
 ```
 # 查詢所有聊天記錄
-curl http://localhost:8000/api/chat/chatlogs
+curl http://localhost:5555/api/chat/chatlogs
 
 # 查詢特定使用者的聊天記錄
-curl "http://localhost:8000/api/chat/chatlogs?user_id=user123"
+curl "http://localhost:5555/api/chat/chatlogs?user_id=user123"
 
 # 查詢特定時間範圍的聊天記錄
-curl "http://localhost:8000/api/chat/chatlogs?start_time=2024-01-01T00:00:00Z&end_time=2024-01-31T23:59:59Z"
+curl "http://localhost:5555/api/chat/chatlogs?start_time=2024-01-01T00:00:00Z&end_time=2024-01-31T23:59:59Z"
 
 # 分頁查詢
-curl "http://localhost:8000/api/chat/chatlogs?limit=50&offset=100"
+curl "http://localhost:5555/api/chat/chatlogs?limit=50&offset=100"
 
 # 組合查詢
-curl "http://localhost:8000/api/chat/chatlogs?user_id=user123&start_time=2024-01-01T00:00:00Z&limit=20"
+curl "http://localhost:5555/api/chat/chatlogs?user_id=user123&start_time=2024-01-01T00:00:00Z&limit=20"
 ```
 
 #### 回應資料範例
@@ -527,7 +546,7 @@ curl "http://localhost:8000/api/chat/chatlogs?user_id=user123&start_time=2024-01
 
 ### 提交評價
 #### URL
-POST http://localhost:8000/api/chat/chatlogs/{chat_log_id}/rating
+POST http://localhost:5555/api/chat/chatlogs/{chat_log_id}/rating
 
 #### 請求參數
 - `chat_log_id`: 聊天記錄ID (路徑參數)
@@ -548,7 +567,7 @@ POST http://localhost:8000/api/chat/chatlogs/{chat_log_id}/rating
 
 #### curl 請求範例
 ```
-curl -X POST http://localhost:8000/api/chat/chatlogs/1/rating \
+curl -X POST http://localhost:5555/api/chat/chatlogs/1/rating \
   -H "Content-Type: application/json" \
   -d '{
     "rating_type": "positive",
@@ -608,11 +627,11 @@ curl -X POST http://localhost:8000/api/chat/chatlogs/1/rating \
 
 ### 獲取預設配置
 #### URL
-GET http://localhost:8000/api/config/
+GET http://localhost:5555/api/config/
 
 #### curl 請求範例
 ```
-curl http://localhost:8000/api/config/
+curl http://localhost:5555/api/config/
 ```
 
 #### 回應資料範例
@@ -652,7 +671,7 @@ curl http://localhost:8000/api/config/
 
 ### 更新預設配置
 #### URL
-PUT http://localhost:8000/api/config/
+PUT http://localhost:5555/api/config/
 
 #### 請求資料範例
 ```json
@@ -666,7 +685,7 @@ PUT http://localhost:8000/api/config/
 
 #### curl 請求範例
 ```
-curl -X PUT http://localhost:8000/api/config/ \
+curl -X PUT http://localhost:5555/api/config/ \
   -H "Content-Type: application/json" \
   -d '{
     "role": "AI助手",
@@ -678,11 +697,11 @@ curl -X PUT http://localhost:8000/api/config/ \
 
 ### 獲取所有配置列表
 #### URL
-GET http://localhost:8000/api/config/list
+GET http://localhost:5555/api/config/list
 
 #### curl 請求範例
 ```
-curl http://localhost:8000/api/config/list
+curl http://localhost:5555/api/config/list
 ```
 
 #### 回應資料範例
@@ -715,19 +734,19 @@ curl http://localhost:8000/api/config/list
 
 ### 根據名稱獲取特定配置
 #### URL
-GET http://localhost:8000/api/config/{config_name}
+GET http://localhost:5555/api/config/{config_name}
 
 #### 請求參數
 - `config_name`: 配置名稱 (路徑參數)
 
 #### curl 請求範例
 ```
-curl http://localhost:8000/api/config/stupid_assistant
+curl http://localhost:5555/api/config/stupid_assistant
 ```
 
 ### 創建新配置
 #### URL
-POST http://localhost:8000/api/config/{config_name}
+POST http://localhost:5555/api/config/{config_name}
 
 #### 請求參數
 - `config_name`: 配置名稱 (路徑參數，不可使用 "default")
@@ -747,7 +766,7 @@ POST http://localhost:8000/api/config/{config_name}
 
 #### curl 請求範例
 ```
-curl -X POST http://localhost:8000/api/config/stupid_assistant \
+curl -X POST http://localhost:5555/api/config/stupid_assistant \
   -H "Content-Type: application/json" \
   -d '{
     "role": "不智能助手",
@@ -762,7 +781,7 @@ curl -X POST http://localhost:8000/api/config/stupid_assistant \
 
 ### 更新特定配置
 #### URL
-PUT http://localhost:8000/api/config/{config_name}
+PUT http://localhost:5555/api/config/{config_name}
 
 #### 請求參數
 - `config_name`: 配置名稱 (路徑參數)
@@ -777,7 +796,7 @@ PUT http://localhost:8000/api/config/{config_name}
 
 #### curl 請求範例
 ```
-curl -X PUT http://localhost:8000/api/config/stupid_assistant \
+curl -X PUT http://localhost:5555/api/config/stupid_assistant \
   -H "Content-Type: application/json" \
   -d '{
     "model_name": "openai:gpt-4o-mini",
@@ -787,14 +806,14 @@ curl -X PUT http://localhost:8000/api/config/stupid_assistant \
 
 ### 刪除配置
 #### URL
-DELETE http://localhost:8000/api/config/{config_name}
+DELETE http://localhost:5555/api/config/{config_name}
 
 #### 請求參數
 - `config_name`: 配置名稱 (路徑參數，不能刪除 "default")
 
 #### curl 請求範例
 ```
-curl -X DELETE http://localhost:8000/api/config/stupid_assistant
+curl -X DELETE http://localhost:5555/api/config/stupid_assistant
 ```
 
 #### 回應資料範例

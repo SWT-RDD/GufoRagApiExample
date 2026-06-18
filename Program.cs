@@ -7,7 +7,7 @@ handler.ServerCertificateCustomValidationCallback =
     (httpRequestMessage, cert, cetChain, policyErrors) => true;
 HttpClient client = new HttpClient(handler); // 如果碰到SSL憑證問題，可能可以嘗試加上或拿掉handler
 
-string baseUrl = "http://localhost:8000";
+string baseUrl = "http://localhost:5555";
 string configName = "demo_config"; // 新增用的 config 名稱
 
 Console.WriteLine("=== GufoRAG API 全流程範例 ===\n");
@@ -130,7 +130,11 @@ try
         ChatLogId = null,
         HumanContent = "請問什麼是人工智慧？",
         ConfigName = "default",
-        UserId = "test_user"
+        UserId = "test_user",
+        // 篩選條件改用 DSL 字串（取代舊的 contains_any / privileges / filter_text）。
+        // 以下示範語法，實際使用時填入符合你資料的條件；未設定則不送出（NullValueHandling.Ignore）。
+        // Dsl = "$privileges in [10, 20] and $containsAny in [1, 2, 3]",
+        // DocumentIds = new List<string> { "doc_001_ai_intro" },
     };
     (var chatRoomId, var latestChatLogId) = await ChatWithBot(chatRequest);
     Console.WriteLine();
@@ -225,6 +229,14 @@ async Task<(int? chatRoomId, int? latestChatLogId)> ChatWithBot(ChatRequest chat
                         var chunk = JsonConvert.DeserializeObject<StreamChunk>(data);
                         switch (chunk?.ChunkType)
                         {
+                            case "thinking":
+                                // 推理過程串流塊（GPT-5、Claude 等 reasoning 模型）
+                                // 與最終回答(message)分開串流，這裡以灰底標示，不計入完整回應
+                                Console.ForegroundColor = ConsoleColor.DarkGray;
+                                Console.Write(chunk.Content);
+                                Console.ResetColor();
+                                Console.Out.Flush();
+                                break;
                             case "message":
                                 Console.Write(chunk.Content);
                                 Console.Out.Flush();
@@ -262,8 +274,8 @@ async Task<(int? chatRoomId, int? latestChatLogId)> ChatWithBot(ChatRequest chat
                                         Console.WriteLine($"  選擇的文件索引列表: {(chatRoom.SelectedIndex != null && chatRoom.SelectedIndex.Count > 0 ? string.Join(", ", chatRoom.SelectedIndex) : "無")}");
                                         Console.WriteLine($"  建議問題: {(chatRoom.SuggestQuestions != null && chatRoom.SuggestQuestions.Count > 0 ? string.Join(", ", chatRoom.SuggestQuestions) : "無")}");
                                         Console.WriteLine($"  最新聊天記錄ID: {chatRoom.LatestChatLogId}");
-                                        Console.WriteLine($" 包含任一關鍵字的過濾條件(contains_any): {(chatRoom.ContainsAny != null && chatRoom.ContainsAny.Count >0 ? string.Join(", ", chatRoom.ContainsAny) : "無")}");
-                                        Console.WriteLine($" 使用者權限列表(privileges): {(chatRoom.Privileges != null && chatRoom.Privileges.Count >0 ? string.Join(", ", chatRoom.Privileges) : "無")}");
+                                        Console.WriteLine($"  篩選條件(dsl): {(string.IsNullOrEmpty(chatRoom.Dsl) ? "無" : chatRoom.Dsl)}");
+                                        Console.WriteLine($"  限制搜尋的文件ID(document_ids): {(chatRoom.DocumentIds != null && chatRoom.DocumentIds.Count > 0 ? string.Join(", ", chatRoom.DocumentIds) : "無")}");
                                         if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
                                         {
                                             Console.WriteLine($"  搜尋結果:");
@@ -367,8 +379,8 @@ async Task<List<ChatRoom>?> GetChatRooms()
                     Console.WriteLine($"  選擇的文件索引列表: {(chatRoom.SelectedIndex != null && chatRoom.SelectedIndex.Count > 0 ? string.Join(", ", chatRoom.SelectedIndex) : "無")}");
                     Console.WriteLine($"  建議問題: {(chatRoom.SuggestQuestions != null && chatRoom.SuggestQuestions.Count > 0 ? string.Join(", ", chatRoom.SuggestQuestions) : "無")}");
                     Console.WriteLine($"  最新聊天記錄ID: {chatRoom.LatestChatLogId}");
-                    Console.WriteLine($" 包含任一關鍵字的過濾條件(contains_any): {(chatRoom.ContainsAny != null && chatRoom.ContainsAny.Count >0 ? string.Join(", ", chatRoom.ContainsAny) : "無")}");
-                    Console.WriteLine($" 使用者權限列表(privileges): {(chatRoom.Privileges != null && chatRoom.Privileges.Count >0 ? string.Join(", ", chatRoom.Privileges) : "無")}");
+                    Console.WriteLine($"  篩選條件(dsl): {(string.IsNullOrEmpty(chatRoom.Dsl) ? "無" : chatRoom.Dsl)}");
+                    Console.WriteLine($"  限制搜尋的文件ID(document_ids): {(chatRoom.DocumentIds != null && chatRoom.DocumentIds.Count > 0 ? string.Join(", ", chatRoom.DocumentIds) : "無")}");
                     if (chatRoom.SearchResults != null && chatRoom.SearchResults.Count > 0)
                     {
                         Console.WriteLine($"  搜尋結果:");
@@ -510,7 +522,7 @@ async Task<List<ChatLog>?> GetChatLogs(int chatRoomId)
 async Task RateChatLog(int chatLogId)
 {
     Console.WriteLine($"[聊天記錄評價] (記錄ID: {chatLogId})");
-    var url = $"{baseUrl}/api/chat/chat_logs/{chatLogId}/rating";
+    var url = $"{baseUrl}/api/chat/chatlogs/{chatLogId}/rating";
     var ratingRequest = new RatingRequest
     {
         RatingType = "positive",
@@ -577,6 +589,14 @@ public class ChatRequest
     public string? UserId { get; set; }
     [JsonProperty("selected_index")]
     public List<string>? SelectedIndex { get; set; }
+    // 篩選條件 DSL 字串（取代舊的 contains_any / privileges / filter_text 欄位）
+    // 範例：$privileges in [10, 20] and $containsAny in [1, 2, 3]
+    // 注意：請求採 extra=forbid，傳入已移除的舊欄位會直接回 422
+    [JsonProperty("dsl", NullValueHandling = NullValueHandling.Ignore)]
+    public string? Dsl { get; set; }
+    // 限制搜尋的文件 ID 清單（選填）
+    [JsonProperty("document_ids", NullValueHandling = NullValueHandling.Ignore)]
+    public List<string>? DocumentIds { get; set; }
 }
 
 public class StreamChunk
@@ -653,10 +673,10 @@ public class ChatRoom
     public int? LatestChatLogId { get; set; }
     [JsonProperty("selected_index")]
     public List<string>? SelectedIndex { get; set; }
-    [JsonProperty("contains_any")]
-    public List<string>? ContainsAny { get; set; }
-    [JsonProperty("privileges")]
-    public List<string>? Privileges { get; set; }
+    [JsonProperty("dsl")]
+    public string? Dsl { get; set; }
+    [JsonProperty("document_ids")]
+    public List<string>? DocumentIds { get; set; }
 }
 
 public class ChatLog
