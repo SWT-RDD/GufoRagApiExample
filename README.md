@@ -528,7 +528,7 @@ GET http://localhost:5555/api/chat/usage-status
 | search_selected_number | int | 8 | 放進上下文的來源卡數，1 到 100 |
 | search_total_number | int | 16 | 向 manager 取回的筆數，1 到 100。必須 ≥ `search_selected_number`，局部更新也擋 |
 | data_source_ratio | float | 0.0 | 0＝純向量，1＝純關鍵字 |
-| use_knowledge_mode | string | "strict" | `none`／`assist`／`strict` |
+| use_knowledge_mode | string | "strict" | `none`／`assist`／`strict`。**兩種模式都讀它**（agent 側的注入點在 respond 節點，租戶自訂 respond 提示詞時照樣附加）。它**不參與 QA 直答的判定**——`none` 與直答同時開著是合法組合，關直答只有 `qa_direct_enabled` 一條路 |
 | enable_rerank | bool | false | 是否重排序 |
 | reranker_name | string | "llm_reranker" | `llm_reranker`／`bge_reranker`／`jina_reranker`，目錄看 `GET /api/config/rerankers` |
 | selected_index | string[] | [] | 索引清單。空＝搜尋全部索引 |
@@ -663,7 +663,7 @@ POST http://localhost:5555/api/config/{config_name}/versions/{version_no}/restor
 | GET | `/api/config/models` | `{models: [...]}`，每筆 8 個鍵：`value`（寫進 `model_name` 的值）、`label`、`provider`（`openai`／`anthropic`／`vllm`／`ollama`）、`reasoning_options`（思考深度枚舉，空陣列＝沒有這個旋鈕）、`reasoning_default`、`omit_temperature`（true＝該模型拒收 temperature）、`adaptive_thinking`（true＝沒有深度旋鈕但會回推理內容）、`max_output_tokens`（0＝不宣告）。vLLM 那幾筆是執行期實況 |
 | GET | `/api/config/rerankers` | 重排序器目錄與各自的分數尺；`qa_direct_score_floor`／`grounding_score_floor` 比的就是這把尺 |
 | GET | `/api/config/builtin-tools` | 內建工具全集，每筆 `name`、`description`、`params`、`allowed_in_skill`、`skill_restriction_reason`、`requires` |
-| GET | `/api/config/limits` | 寫入層界線目錄，分組 `chat`／`config`／`policy`／`glossary`／`alias`／`skill`／`mcp`／`pagination`。葉節點是 `{min?, max?, step?, note?, applies_when?, values?}`，只放存在的那一邊。`chat` 分組含 `chat_room_id`、`chat_log_id`、`prompt_version` 三個請求體識別欄的界線，組請求體的地方也該讀它 |
+| GET | `/api/config/limits` | 寫入層界線目錄 ＋ 逐欄的模式適用性宣告。**界線分組**是 `chat`／`config`／`policy`／`glossary`／`alias`／`skill`／`mcp`／`pagination`，葉節點 `{min?, max?, step?, note?, applies_when?, values?}`，只放存在的那一邊。`chat` 分組含 `chat_room_id`、`chat_log_id`、`prompt_version` 三個請求體識別欄的界線，組請求體的地方也該讀它。⚠️ **另有一顆與那八組平行的頂層鍵 `applies_to`**，葉節點形狀完全不同——見下方 |
 
 ```json
 {"models": [
@@ -672,6 +672,70 @@ POST http://localhost:5555/api/config/{config_name}/versions/{version_no}/restor
    "omit_temperature": false, "adaptive_thinking": false, "max_output_tokens": 0}
 ]}
 ```
+
+
+### `applies_to`：哪一顆設定在哪一種模式下有作用
+
+`GET /api/config/limits` 除了八個界線分組，另有一顆**平行的頂層鍵** `applies_to`。它答的是
+另一個問題：**這一顆設定在哪一種問答模式（`search_mode`）下有管道生效**——判準是執行路徑
+上有沒有讀取點，只有引擎答得出來。設定頁據此標註適用性，**不要自己維護一份對照表**。
+
+鍵是**欄位名**（config 的每一顆，一顆不缺，另加四顆逐請求欄位 `single_prompt`／`dsl`／
+`document_ids`／`intent_context`），與界線分組的鍵（界線名）不同。
+
+```json
+{
+  "chat": { "human_content_len": {"max": 2000} },
+  "applies_to": {
+    "index_tiers": {
+      "applies_to": "both", "read_in": ["traditional", "agent"],
+      "note": "…", "dimensions": {"scope": "both", "tiering": "traditional"}
+    },
+    "agent_max_iterations": {
+      "applies_to": "agent", "read_in": ["agent"], "note": "…"
+    }
+  }
+}
+```
+
+葉節點必有 `{applies_to, read_in, note}`，可選 `dimensions`。值域是**五個字面、閉合**：
+
+| 值 | 意思 |
+| --- | --- |
+| `both` | 兩條答題路徑都有讀取點 |
+| `agent` | 只有 `search_mode="agent"` 那條有 |
+| `traditional` | 只有另一條有 |
+| `none` | 兩條問答路徑都不讀，作用在別處（`note` 會指出在哪） |
+| `unknown` | 判不出來（原樣交給第三方、看不到消費點的欄位） |
+
+收到第六種請 fail loud，不要猜、也不要落回預設。
+
+#### ⚠️ 兩個一定要避開的實作
+
+**一、界線那支通用走訪不要走到 `applies_to` 上。** 你如果寫了
+`for (const g of Object.values(json)) for (const leaf of Object.values(g)) leaf.max`，
+它會掃出七十幾顆 `max === undefined` 的假葉節點，設定頁替每一顆畫一個無上界的輸入框。
+先 `if (name === "applies_to") continue`。
+
+**二、`applies_to === "none"` **不等於**可以隱藏。** 它答的是「問答時哪條路徑會讀它」，
+不是「設定頁畫不畫」——它是拿來**標註**適用性的，不是可見性開關。config 的每一顆都設得
+進去、都在某處有作用。把它接成「`none` ⇒ 隱藏」是最自然的那個實作，而對三顆 `none`
+**全部都錯**：
+
+| 欄位 | 為什麼還是要畫 |
+| --- | --- |
+| `welcome_message` | 開場白由呼叫端自己渲染，不畫就沒地方設 |
+| `alias_table_ids` | 它是每一顆 `alias_apply_*` 的取值全集，不畫它那四顆一個都設不了 |
+| `ragas_model_name` | 離線評測端點用的 |
+
+同理，`agent`／`traditional` 那幾顆若在不符的模式下**整個藏起來**，值仍然在——租戶看不到
+也清不掉，切換模式時那些他從沒見過的值會當場生效。灰掉並附上 `note` 可以同時避開兩邊。
+
+`dimensions` 出現時代表**一個字面值蓋不住這一欄**（`index_tiers` 就是：範圍那一維兩模式
+同值、分層行為那一維只有傳統有），設定頁要照它分維度標示，不要壓成單一標示。
+
+`read_in` 是導出 `applies_to` 的依據，四個區域：`traditional`／`agent`／`qa_direct`／
+`shared`，後兩者與模式正交（讀到就是 `both`）。
 
 ---
 
@@ -703,7 +767,77 @@ config 的 `mcp_server_ids` 決定哪幾台對該設定生效，空清單＝不�
 | GET / PUT / DELETE | `/api/skills/{skill_id}` | 單筆讀、改（每次寫入存版本）、刪 |
 | GET / POST | `/api/skills/{skill_id}/versions[/{version}[/restore]]` | 版本歷史、取版、還原 |
 
-掛到設定的方式：`glossary_table_ids`（授權哪幾張）與 `glossary_apply_agent`（主 agent 看得到哪幾張）、`alias_table_ids` 與三個 `alias_apply_*`（在哪個階段生效）、`skill_ids`。被引用的表或 skill 不可刪（400）。not-found 各有自己的碼：2014、2016、2015，版本不存在是 2018。
+掛到設定的方式：`glossary_table_ids`（授權哪幾張）與 `glossary_apply_agent`（主 agent 看得到哪幾張）、`alias_table_ids` 與四個 `alias_apply_*`、`skill_ids`。
+
+別名表的四個套用階段各自獨立，取值都必須 ⊆ `alias_table_ids`——**設定頁要畫四顆旋鈕**：
+
+| 欄位 | 階段 | 作用 |
+| --- | --- | --- |
+| `alias_apply_match` | 比對期 | QA 直答完全命中的比對鍵 |
+| `alias_apply_search` | 檢索期 | 查詢裡出現的別名，把標準詞**附加**在後面（不取代）。關鍵字檢索那半是 BM25，文件裡沒有字面出現的簡稱就是零命中 |
+| `alias_apply_reasoning` | 推理期 | 術語表 lookup 工具（只有 agent 模式存在這顆工具） |
+| `alias_apply_output` | 出口期 | 改寫使用者看得到的字 |
+
+四條的別名加總各有各的上限（見 `GET /api/config/limits` 的 `alias` 分組）。撞到時回 400，訊息會指名是哪幾張表各貢獻幾個別名——**把最大的那幾張移出該欄即可，移出一個階段不影響它在其他階段的作用**。被引用的表或 skill 不可刪（400）。not-found 各有自己的碼：2014、2016、2015，版本不存在是 2018。
+
+### QA 直答比對鍵（資料健檢用）
+
+```
+POST http://localhost:5555/api/qa-direct/match-keys
+```
+
+把 QA 直答「完全命中」那一層的比對鍵投影出來，答的是「**這兩題會不會被判成同一題**」。
+用途是對一份 QA 語料做健檢（重複題、同一題掛在兩個主題底下），而判準必須與執行期逐位元組
+相同——自己重建一把尺的話，兩個方向的漂移都是靜默的：尺變寬就一筆發現都不產生（讀起來與
+「這批資料很乾淨」一模一樣），尺變緊就報出一批根本不會相撞的假重複。
+
+| 欄位 | 必填 | 說明 |
+| --- | --- | --- |
+| `config_name` | ✅ | 要套用哪份設定的**比對期**別名表。上限 100 字 |
+| `questions` | ✅ | 原文送進來，不必先自己正規化。項數上限見 `chat.match_key_questions`，逐項見 `chat.human_content_len` |
+
+`config_name` 沒有預設值是刻意的：比對鍵的最後一段是別名替換（取自該設定的
+`alias_apply_match`），一支不吃別名的正規化對綁了表的租戶會**系統性偏窄**。要不套別名的鍵，
+就指一份 `alias_apply_match` 為空的設定。
+
+```json
+{"config_name": "tenant-a", "questions": ["推廣貿易服務費要如何繳納？", "推貿費要如何繳納", "？？？"]}
+```
+
+回應（`json_data`）：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `qa_direct_active` | 這份設定之下直答**跑不跑得起來**（總開關 ＋ QA 集非空）。見下方 ⚠️ |
+| `alias_table_ids` | **實際套用**的別名表（＝該設定的 `alias_apply_match`），不是 `alias_table_ids` 那顆授權全集 |
+| `results` | 與 `questions` **同序等長**，靠位置對回去 |
+
+`results[]`：`question`（回聲）、`key`（比對鍵）、`matchable`、`alias_hits`（去重、有上界）、
+`alias_hits_truncated`。
+
+**分群規則**：`key` 相同**且** `matchable` 為真 ⇒ 直答會判成同一題。
+
+#### ⚠️ 兩個判準，少一個就會誤報
+
+**一、分群前先濾掉 `matchable === false`。** 正規化後為空的標題一律不命中，所以純空白、
+純標點（`？？？`）那一類的 `key` 都是 `""`，而**它們彼此不會相撞**。只看 `key` 的話，
+那一整類會被算成一個巨大的重複群——而它正是匯入資料最常見的一類（空儲存格、佔位列）。
+
+**二、`qa_direct_active === false` 的話，這一批不值得分群。** 比對鍵回答的是「使用者會不會
+拿到兩個答案」，而那個問題在直答根本不會發生的設定上沒有意義。不可能相撞的狀態有三種，
+而**只有一種是 404**：
+
+| 狀態 | 回應 |
+| --- | --- |
+| 設定不存在 | **404 `code=2009`** |
+| `qa_direct_enabled=false` | 200，`qa_direct_active: false` |
+| `qa_direct_indexes=[]` | 200，`qa_direct_active: false` |
+
+只靠 404 分流的話，後兩種會被當成正常結果照常分群。鍵仍然照算——這一顆答的是「值不值得
+分群」，不是「算不算得出鍵」。
+
+`code=2009` **只在「這份設定不存在」時出現**（版本不存在是另一顆碼 2019），可以據它分流。
+一個從來沒問過任何一題的租戶還沒有設定，那一次健檢請標成「未評估」，不要當成乾淨。
 
 ### RAGAS 批次評測
 | 方法 | 路徑 | 說明 |

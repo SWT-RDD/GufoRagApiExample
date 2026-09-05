@@ -231,8 +231,48 @@ try
     }
     Console.WriteLine();
 
-    // ── 15. 刪除示範用設定。default 不可刪；被聊天室引用的設定照刪，既有房間靠凍結值繼續運作 ──
-    Console.WriteLine($"[15] DELETE /api/config/{configName}");
+    // ── 15. QA 直答比對鍵：把「這兩題會不會被判成同一題」問回上游，不要自己重建一把尺 ──
+    //
+    // 分群規則是 key 相同 **且** matchable 為真。兩個判準少一個就會誤報：
+    //   ① 純空白／純標點的 key 都是 ""，而它們彼此**不會**相撞——只看 key 會把那一整類
+    //      算成一個巨大的重複群，而它正是匯入資料最常見的一類（空儲存格、佔位列）。
+    //   ② qa_direct_active 為 false 時整批不值得分群：直答根本不會發生的設定上，
+    //      「使用者會不會拿到兩個答案」這個問題沒有意義。
+    Console.WriteLine("[15] POST /api/qa-direct/match-keys");
+    var matchKeys = await PostJson<JObject>($"{baseUrl}/api/qa-direct/match-keys", new
+    {
+        config_name = configName,
+        questions = new[] { "推廣貿易服務費要如何繳納？", "推廣貿易服務費要如何繳納", "？？？" },
+    });
+    if (matchKeys.Ok)
+    {
+        var active = matchKeys.Data!["qa_direct_active"]!.Value<bool>();
+        Console.WriteLine($"  qa_direct_active={active}"
+                          + (active ? "" : "（這份設定不會直答，這一批不值得分群）"));
+
+        // 只把「算得出鍵、而且鍵非空」的那幾題拿去分群。
+        var groups = matchKeys.Data!["results"]!
+            .Where(r => r["matchable"]!.Value<bool>())
+            .GroupBy(r => r["key"]!.Value<string>())
+            .Where(g => g.Count() > 1);
+        foreach (var g in groups)
+        {
+            var qs = g.Select(r => r["question"]!.Value<string>());
+            Console.WriteLine($"  會被判成同一題：{string.Join(" ／ ", qs)}");
+        }
+        var skipped = matchKeys.Data!["results"]!.Count(r => !r["matchable"]!.Value<bool>());
+        if (skipped > 0) Console.WriteLine($"  matchable=false 而略過：{skipped} 題");
+    }
+    else if (matchKeys.Code == 2009)
+    {
+        // 這個租戶還沒有設定（從來沒問過任何一題）⇒ 直答不可能發生。
+        // 這一項要標成「本輪未評估」，不要當成乾淨。
+        Console.WriteLine("  設定不存在 ⇒ 這一項未評估（不是通過）");
+    }
+    Console.WriteLine();
+
+    // ── 16. 刪除示範用設定。default 不可刪；被聊天室引用的設定照刪，既有房間靠凍結值繼續運作 ──
+    Console.WriteLine($"[16] DELETE /api/config/{configName}");
     var deleted = await DeleteJson<JObject>($"{baseUrl}/api/config/{configName}");
     if (deleted.Ok) Console.WriteLine($"  已刪除：{deleted.Data!["deleted_config"]}");
 }
