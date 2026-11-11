@@ -20,6 +20,7 @@
 | GET | `/api/chat/chatrooms` | 聊天室清單（分頁，預設 100 筆） |
 | GET | `/api/chat/chatrooms/user/{user_id}` | 某使用者的聊天室（含 `total_count`） |
 | GET | `/api/chat/chatrooms/{chat_room_id}/chatlogs` | 某聊天室的聊天記錄（分頁） |
+| PATCH | `/api/chat/chatrooms/{chat_room_id}` | 修改聊天室標題（手動改名） |
 | DELETE | `/api/chat/chatrooms/{chat_room_id}` | 刪除聊天室（軟刪除） |
 | GET | `/api/chat/chatlogs` | 聊天記錄查詢（可依 user_id／時間等過濾，分頁） |
 | GET | `/api/chat/chatlogs/{chat_log_id}` | 單筆聊天記錄 |
@@ -117,6 +118,7 @@ data: {
   "data": {
     "id": 123,
     "title": "AI助手對話",
+    "title_source": "auto",
     "description": "一般AI對話",
     "role": "智能助手",
     "model_name": "openai:gpt-5-mini",
@@ -258,6 +260,7 @@ curl "http://localhost:5555/api/chat/chatrooms/user/user123?limit=10&offset=10"
       {
         "id": 1,
         "title": "AI助手對話",
+        "title_source": "auto",
         "description": "一般AI對話",
         "role": "智能助手",
         "chatroom_system_prompt": "你是一個專業的AI助手...",
@@ -276,6 +279,8 @@ curl "http://localhost:5555/api/chat/chatrooms/user/user123?limit=10&offset=10"
         "memory_count": 3,
         "response_format": "markdown",
         "enable_suggest_questions": true,
+        "enable_title": true,
+        "update_title_only_once": false,
         "temperature": 0.7,
         "document_field_mapping": {},
         "chat_logs_count": 5,
@@ -293,6 +298,41 @@ curl "http://localhost:5555/api/chat/chatrooms/user/user123?limit=10&offset=10"
   "http_status": 200
 }
 ```
+
+### 聊天室標題怎麼來
+
+- 自動命名由 config 的 `enable_title`（預設開）控制：標題與描述由同一次 LLM 呼叫產生；`update_title_only_once`
+  開著時只在還沒命名時寫一次，關著（預設）則每輪依最新對話重寫。
+- `title_source` 表示目前標題的來源：`null` 尚未命名、`auto` 系統命名、`manual` 使用者改過。
+- 推薦問題由 `enable_suggest_questions` 另外控制，兩者互不影響；兩者都不需要產出時，該輪不會多呼叫 LLM。
+
+### 修改聊天室標題
+```
+curl -X PATCH http://localhost:5555/api/chat/chatrooms/1 \
+  -H "Content-Type: application/json" \
+  -d '{"title": "年度預算討論"}'
+```
+回應的 `json_data` 是房間資料，欄位與聊天室清單的單一項目相同（以下為節錄）：
+```json
+{
+  "json_data": {
+    "id": 1,
+    "title": "年度預算討論",
+    "title_source": "manual",
+    "chat_logs_count": 3
+  },
+  "error": false,
+  "message": "操作成功",
+  "code": 0,
+  "http_status": 200
+}
+```
+- 請求體只有 `title` 一欄，多送其他欄位回 422。
+- 標題去頭尾空白後不可為空、不可含控制字元（含換行與 tab）、不可超過長度上限，不合法回 400 `INVALID_INPUT`（1001），`message` 後綴帶實際上限。
+- 房間不存在或已刪除回 404 `CHAT_ROOM_NOT_FOUND`。
+- 改名後 `title_source` 變成 `manual`：系統**不再自動改這個標題**（包括改名當下正在進行的那一輪），描述仍會照設定自動更新。目前沒有「還原成自動命名」的方式。
+- 手動標題是使用者自己輸入的文字，不會被輸出遮蔽規則清空或替換。
+- 不檢查 `user_id`：由呼叫端（外部應用後端）確認使用者有權改這間房。
 
 ### 刪除聊天室
 ```
@@ -506,7 +546,9 @@ curl -X POST http://localhost:5555/api/chat/chatlogs/1/rating \
 | use_knowledge_mode | string | 知識使用模式：`none`／`assist`／`strict` |
 | enable_rerank | boolean | 是否重新排序搜尋結果 |
 | memory_count | integer | 記住的歷史對話數量 |
-| enable_suggest_questions | boolean | 是否產生推薦問題 |
+| enable_suggest_questions | boolean | 是否產生推薦問題（只管推薦問題） |
+| enable_title | boolean | 是否自動產生聊天室標題與描述（預設 true） |
+| update_title_only_once | boolean | 只在還沒命名時寫標題與描述（預設 false＝每輪重寫；`enable_title` 開時有效） |
 | response_format | string | 回應格式：`markdown`／`html` |
 | document_field_mapping | object | 文件欄位映射（索引欄位 → 給 AI 看的名稱） |
 | selected_index | array | 預設檢索的索引列表 |
@@ -530,6 +572,8 @@ curl http://localhost:5555/api/config/
     "enable_rerank": false,
     "memory_count": 5,
     "enable_suggest_questions": true,
+    "enable_title": true,
+    "update_title_only_once": false,
     "response_format": "markdown",
     "temperature": null,
     "timezone": "Asia/Taipei",
